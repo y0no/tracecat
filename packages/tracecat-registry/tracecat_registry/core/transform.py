@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import redis.asyncio as redis
+import asyncio
 
 from tracecat_registry import ActionIsInterfaceError, registry
 
@@ -191,7 +192,7 @@ async def _deduplicate_redis(
 
 @registry.register(
     default_title="Deduplicate",
-    description="Deduplicate a JSON object or a list of JSON objects given a list of keys.",
+    description="Deduplicate a JSON object or a list of JSON objects given a list of keys. Returns a list of deduplicated JSON objects.",
     display_group="Data Transform",
     namespace="core.transform",
 )
@@ -203,7 +204,7 @@ async def deduplicate(
     keys: Annotated[
         list[str],
         Doc(
-            "List of keys to deduplicate by. Supports dot notation for nested keys (e.g. `['user.id']`)."
+            "List of JSONPath fields to deduplicate by. Supports dot notation for nested keys (e.g. `['user.id']`)."
         ),
     ],
     expire_seconds: Annotated[
@@ -216,7 +217,7 @@ async def deduplicate(
             "Whether to persist deduplicated items across calls. If True, deduplicates across calls. If False, deduplicates within the current call only."
         ),
     ] = True,
-) -> dict[str, Any] | list[dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if not items:
         return []
 
@@ -236,7 +237,7 @@ async def deduplicate(
         return tuple(values)
 
     seen = {}
-    result = []
+    results = []
 
     for item in items_list:
         key = get_nested_values(item, keys)
@@ -250,15 +251,35 @@ async def deduplicate(
             seen[key] = item.copy()
 
     if persist:
-        result = await _deduplicate_redis(seen, expire_seconds)
+        results = await _deduplicate_redis(seen, expire_seconds)
     else:
-        result = list(seen.values())
+        results = list(seen.values())
 
-    # Return single dict if input was single dict and we have exactly one result
-    if isinstance(items, dict) and len(result) == 1:
-        return result[0]
+    return results
 
-    return result
+
+@registry.register(
+    default_title="Is duplicate",
+    description="Check if a JSON object was recently seen.",
+    display_group="Data Transform",
+    namespace="core.transform",
+)
+async def is_duplicate(
+    item: Annotated[
+        dict[str, Any],
+        Doc("JSON object to check."),
+    ],
+    keys: Annotated[
+        list[str],
+        Doc("List of JSONPath fields to check."),
+    ],
+    expire_seconds: Annotated[
+        int,
+        Doc("Time to live for the deduplicated items in seconds. Defaults to 1 hour."),
+    ] = 3600,
+) -> bool:
+    result = await deduplicate(item, keys, expire_seconds=expire_seconds, persist=True)
+    return len(result) == 0
 
 
 @registry.register(
@@ -365,3 +386,13 @@ def gather(
     ] = "partition",
 ) -> list[Any]:
     raise ActionIsInterfaceError()
+
+
+@registry.register(
+    default_title="Wait",
+    description="Wait for a given number of seconds.",
+    display_group="Data Transform",
+    namespace="core.transform",
+)
+async def wait(seconds: Annotated[int, Doc("Number of seconds to wait.")]) -> None:
+    await asyncio.sleep(seconds)
