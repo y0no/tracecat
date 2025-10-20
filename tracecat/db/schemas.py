@@ -15,6 +15,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Interval,
+    String,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -23,6 +24,7 @@ from sqlmodel import UUID, Field, Relationship, SQLModel, UniqueConstraint
 from tracecat import config
 from tracecat.auth.models import UserRole
 from tracecat.authz.models import WorkspaceRole
+from tracecat.cases.durations.models import CaseDurationAnchorSelection
 from tracecat.cases.enums import (
     CaseEventType,
     CasePriority,
@@ -130,9 +132,17 @@ class Workspace(Resource, table=True):
         back_populates="owner",
         sa_relationship_kwargs={"cascade": "all, delete"},
     )
-    tags: list["Tag"] = Relationship(
+    workflow_tags: list["Tag"] = Relationship(
         back_populates="owner",
         sa_relationship_kwargs={"cascade": "all, delete"},
+    )
+    case_tags: list["CaseTag"] = Relationship(
+        back_populates="owner",
+        sa_relationship_kwargs={"cascade": "all, delete"},
+    )
+    case_duration_definitions: list["CaseDurationDefinition"] = Relationship(
+        back_populates="owner",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
     folders: list["WorkflowFolder"] = Relationship(
         back_populates="owner",
@@ -767,8 +777,10 @@ class CaseFields(SQLModel, TimestampMixin, table=True):
     case: "Case" = Relationship(back_populates="fields")
 
 
-class CaseTag(SQLModel, table=True):
-    """Link table for cases and tags with optional metadata."""
+class CaseTagLink(SQLModel, table=True):
+    """Link table for cases and case tags."""
+
+    __tablename__: str = "case_tag_link"
 
     case_id: uuid.UUID = Field(
         sa_column=Column(
@@ -777,9 +789,79 @@ class CaseTag(SQLModel, table=True):
     )
     tag_id: UUID4 = Field(
         sa_column=Column(
-            UUID, ForeignKey("tag.id", ondelete="CASCADE"), primary_key=True
+            UUID, ForeignKey("case_tag.id", ondelete="CASCADE"), primary_key=True
         )
     )
+
+
+class CaseTag(Resource, table=True):
+    """A tag for organizing and filtering cases."""
+
+    __tablename__: str = "case_tag"
+    __table_args__ = (
+        UniqueConstraint("name", "owner_id", name="uq_case_tag_name_owner"),
+        UniqueConstraint("ref", "owner_id", name="uq_case_tag_ref_owner"),
+    )
+
+    id: UUID4 = Field(
+        default_factory=uuid.uuid4, nullable=False, unique=True, index=True
+    )
+    owner_id: OwnerID = Field(
+        sa_column=Column(UUID, ForeignKey("workspace.id", ondelete="CASCADE"))
+    )
+    name: str = Field(index=True, nullable=False)
+    ref: str = Field(index=True, nullable=False)
+    color: str | None = Field(default=None)
+    owner: "Workspace" = Relationship(back_populates="case_tags")
+    cases: list["Case"] = Relationship(
+        back_populates="tags",
+        link_model=CaseTagLink,
+    )
+
+
+class CaseDurationDefinition(Resource, table=True):
+    """Workspace-defined case duration metric anchored on case events."""
+
+    __tablename__: str = "case_duration_definition"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "name",
+            name="uq_case_duration_definition_owner_name",
+        ),
+    )
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    owner_id: OwnerID = Field(
+        sa_column=Column(UUID, ForeignKey("workspace.id", ondelete="CASCADE"))
+    )
+    name: str = Field(..., max_length=255, index=True)
+    description: str | None = Field(default=None, max_length=1024)
+    start_event_type: CaseEventType = Field(...)
+    start_timestamp_path: str = Field(default="created_at", max_length=255)
+    start_field_filters: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
+    )
+    start_selection: CaseDurationAnchorSelection = Field(
+        default=CaseDurationAnchorSelection.FIRST
+    )
+    end_event_type: CaseEventType = Field(...)
+    end_timestamp_path: str = Field(default="created_at", max_length=255)
+    end_field_filters: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
+    )
+    end_selection: CaseDurationAnchorSelection = Field(
+        default=CaseDurationAnchorSelection.FIRST
+    )
+
+    owner: "Workspace" = Relationship(back_populates="case_duration_definitions")
 
 
 class RunbookCaseLink(SQLModel, table=True):
@@ -873,9 +955,9 @@ class Case(Resource, table=True):
         back_populates="assigned_cases",
         sa_relationship_kwargs={"lazy": "selectin"},
     )
-    tags: list["Tag"] = Relationship(
+    tags: list["CaseTag"] = Relationship(
         back_populates="cases",
-        link_model=CaseTag,
+        link_model=CaseTagLink,
         sa_relationship_kwargs={"lazy": "selectin"},
     )
     runbooks: list["Runbook"] = Relationship(
@@ -1298,9 +1380,49 @@ class Chat(Resource, table=True):
         sa_column=Column(JSONB),
         description="The tools available to the agent for this chat.",
     )
+    last_stream_id: str | None = Field(
+        default=None,
+        sa_column=Column(String(length=128), nullable=True),
+        description="Last processed Redis stream ID for this chat.",
+    )
 
     # Relationships
     user: User = Relationship(back_populates="chats")
+    messages: list["ChatMessage"] = Relationship(
+        back_populates="chat",
+        sa_relationship_kwargs={
+            "cascade": "all, delete",
+            "order_by": "ChatMessage.created_at.asc()",
+        },
+    )
+
+
+class ChatMessage(Resource, table=True):
+    """A message in a chat."""
+
+    __tablename__: str = "chat_message"
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    kind: str = Field(..., description="The kind of message", nullable=False)
+    data: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB),
+        description="The data of the message.",
+    )
+
+    # Foreign key
+    chat_id: uuid.UUID = Field(
+        sa_column=Column(
+            UUID, ForeignKey("chat.id", ondelete="CASCADE"), nullable=False
+        )
+    )
+    # Relationships
+    chat: Chat = Relationship(back_populates="messages")
 
 
 class Runbook(Resource, table=True):
@@ -1309,7 +1431,7 @@ class Runbook(Resource, table=True):
     __tablename__: str = "runbook"
 
     __table_args__ = (
-        UniqueConstraint("alias", "owner_id", name="uq_prompt_alias_owner_id"),
+        UniqueConstraint("alias", "owner_id", name="uq_runbook_alias_owner_id"),
     )
 
     id: uuid.UUID = Field(
@@ -1346,10 +1468,10 @@ class Runbook(Resource, table=True):
 
 
 class Tag(Resource, table=True):
-    """A tag for organizing and filtering entities."""
+    """A workflow tag for organizing and filtering workflows."""
 
     __table_args__ = (
-        UniqueConstraint("name", "owner_id"),
+        UniqueConstraint("name", "owner_id", name="uq_tag_name_owner"),
         UniqueConstraint("ref", "owner_id", name="uq_tag_ref_owner"),
     )
 
@@ -1364,14 +1486,10 @@ class Tag(Resource, table=True):
     ref: str = Field(index=True, nullable=False)
     color: str | None = Field(default=None)
     # Relationships
-    owner: "Workspace" = Relationship(back_populates="tags")
+    owner: "Workspace" = Relationship(back_populates="workflow_tags")
     workflows: list["Workflow"] = Relationship(
         back_populates="tags",
         link_model=WorkflowTag,
-    )
-    cases: list["Case"] = Relationship(
-        back_populates="tags",
-        link_model=CaseTag,
     )
 
 

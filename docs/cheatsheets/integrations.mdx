@@ -35,6 +35,14 @@ description: A cheatsheet of core actions, integrations, and credentials support
 | core.transform | reshape         | -       |
 | core.workflow  | execute         | -       |
 
+## AI Actions
+
+| Namespace      | Function        | Secrets |
+| -------------- | --------------- | ------- |
+| ai             | action          | -       |
+| ai             | agent           | -       |
+| ai             | slackbot        | -       |
+
 ## Integrations
 
 <Note>Integration namespaces are prefixed with `tools.`.</Note>
@@ -126,7 +134,6 @@ description: A cheatsheet of core actions, integrations, and credentials support
 | tools.ldap             | delete_entry                            | `ldap`                    |
 | tools.ldap             | modify_entry                            | `ldap`                    |
 | tools.ldap             | search_entries                          | `ldap`                    |
-| tools.microsoft_graph  | get_access_token                        | `microsoft_graph`         |
 | tools.okta             | activate_user                           | `okta`, `ssl`             |
 | tools.okta             | add_to_group                            | `okta`, `ssl`             |
 | tools.okta             | assign_group_to_app                     | `okta`, `ssl`             |
@@ -189,11 +196,6 @@ description: A cheatsheet of core actions, integrations, and credentials support
 | tools.splunk           | search_events                           | `splunk`, `ssl`           |
 | tools.splunk           | submit_hec_event                        | `splunk_hec`, `ssl`       |
 | tools.splunk           | update_kv_entry                         | `splunk`, `ssl`           |
-| tools.thehive          | add_case_comment                        | `ssl`, `thehive`          |
-| tools.thehive          | create_case                             | `ssl`, `thehive`          |
-| tools.thehive          | update_case_description                 | `ssl`, `thehive`          |
-| tools.thehive          | update_case_fields                      | `ssl`, `thehive`          |
-| tools.thehive          | update_case_status                      | `ssl`, `thehive`          |
 | tools.threatstream     | lookup_domain                           | `ssl`, `threatstream`     |
 | tools.threatstream     | lookup_email                            | `ssl`, `threatstream`     |
 | tools.threatstream     | lookup_file_hash                        | `ssl`, `threatstream`     |

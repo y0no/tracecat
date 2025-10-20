@@ -33,9 +33,13 @@ from tracecat.auth.users import (
     fastapi_users,
 )
 from tracecat.cases.attachments.router import router as case_attachments_router
+from tracecat.cases.durations.router import router as case_durations_router
 from tracecat.cases.records.router import router as case_records_router
 from tracecat.cases.router import case_fields_router as case_fields_router
 from tracecat.cases.router import cases_router as cases_router
+from tracecat.cases.tag_definitions.router import (
+    router as case_tag_definitions_router,
+)
 from tracecat.cases.tags.router import router as case_tags_router
 from tracecat.chat.router import router as chat_router
 from tracecat.contexts import ctx_role
@@ -187,6 +191,7 @@ def create_app(**kwargs) -> FastAPI:
             {"name": "triggers", "description": "Workflow triggers"},
             {"name": "secrets", "description": "Secret management"},
         ],
+        servers=[{"url": config.TRACECAT__API_ROOT_PATH}],
         generate_unique_id_function=custom_generate_unique_id,
         lifespan=lifespan,
         default_response_class=ORJSONResponse,
@@ -220,7 +225,9 @@ def create_app(**kwargs) -> FastAPI:
     app.include_router(cases_router)
     app.include_router(case_fields_router)
     app.include_router(case_tags_router)
+    app.include_router(case_tag_definitions_router)
     app.include_router(case_attachments_router)
+    app.include_router(case_durations_router)
     app.include_router(case_records_router)
     app.include_router(chat_router)
     app.include_router(

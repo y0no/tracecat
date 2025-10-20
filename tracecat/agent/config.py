@@ -7,8 +7,8 @@ from tracecat.agent.models import (
 # https://ai.pydantic.dev/api/models/base/
 MODEL_CONFIGS = {
     # Maps the pydantic-ai model name to the Tracecat model config
-    "gpt-5-mini": ModelConfig(
-        name="gpt-5-mini",
+    "gpt-4o-mini": ModelConfig(
+        name="gpt-4o-mini",
         provider="openai",
         org_secret_name="agent-openai-credentials",
         secrets={
@@ -23,8 +23,8 @@ MODEL_CONFIGS = {
             "required": ["anthropic"],
         },
     ),
-    "us.anthropic.claude-3-7-sonnet-20250219-v1:0": ModelConfig(
-        name="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "us.anthropic.claude-sonnet-4-20250514-v1:0": ModelConfig(
+        name="us.anthropic.claude-sonnet-4-20250514-v1:0",
         provider="bedrock",
         org_secret_name="agent-bedrock-credentials",
         secrets={

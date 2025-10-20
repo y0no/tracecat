@@ -1,8 +1,9 @@
 import uuid
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy.exc import DBAPIError, NoResultFound
+from sqlalchemy.exc import DBAPIError, NoResultFound, ProgrammingError
 from starlette.status import (
     HTTP_200_OK,
     HTTP_201_CREATED,
@@ -38,10 +39,10 @@ from tracecat.cases.service import (
     CaseFieldsService,
     CasesService,
 )
+from tracecat.cases.tags.models import CaseTagRead
+from tracecat.cases.tags.service import CaseTagsService
 from tracecat.db.dependencies import AsyncDBSession
 from tracecat.logger import logger
-from tracecat.tags.models import TagRead
-from tracecat.tags.service import TagsService
 from tracecat.types.auth import Role
 from tracecat.types.pagination import (
     CursorPaginatedResponse,
@@ -85,10 +86,14 @@ async def list_cases(
     search_term: str | None = Query(
         None, description="Text to search for in case summary and description"
     ),
-    status: CaseStatus | None = Query(None, description="Filter by case status"),
-    priority: CasePriority | None = Query(None, description="Filter by case priority"),
-    severity: CaseSeverity | None = Query(None, description="Filter by case severity"),
-    assignee_id: str | None = Query(
+    status: list[CaseStatus] | None = Query(None, description="Filter by case status"),
+    priority: list[CasePriority] | None = Query(
+        None, description="Filter by case priority"
+    ),
+    severity: list[CaseSeverity] | None = Query(
+        None, description="Filter by case severity"
+    ),
+    assignee_id: list[str] | None = Query(
         None, description="Filter by assignee ID or 'unassigned'"
     ),
     tags: list[str] | None = Query(
@@ -101,7 +106,7 @@ async def list_cases(
     # Convert tag identifiers to IDs
     tag_ids = []
     if tags:
-        tags_service = TagsService(session, role)
+        tags_service = CaseTagsService(session, role)
         for tag_identifier in tags:
             try:
                 tag = await tags_service.get_tag_by_ref_or_id(tag_identifier)
@@ -117,17 +122,20 @@ async def list_cases(
     )
 
     # Parse assignee_id - handle special "unassigned" value
-    parsed_assignee_id = None
-    if assignee_id == "unassigned":
-        parsed_assignee_id = "unassigned"  # Special marker for null assignees
-    elif assignee_id:
-        try:
-            parsed_assignee_id = uuid.UUID(assignee_id)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=HTTP_400_BAD_REQUEST,
-                detail=f"Invalid assignee_id: {assignee_id}",
-            ) from e
+    parsed_assignee_ids: list[uuid.UUID] = []
+    include_unassigned = False
+    if assignee_id:
+        for identifier in assignee_id:
+            if identifier == "unassigned":
+                include_unassigned = True
+                continue
+            try:
+                parsed_assignee_ids.append(uuid.UUID(identifier))
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid assignee_id: {identifier}",
+                ) from e
 
     try:
         cases = await service.list_cases_paginated(
@@ -136,7 +144,8 @@ async def list_cases(
             status=status,
             priority=priority,
             severity=severity,
-            assignee_id=parsed_assignee_id,
+            assignee_ids=parsed_assignee_ids or None,
+            include_unassigned=include_unassigned,
             tag_ids=tag_ids if tag_ids else None,
         )
     except Exception as e:
@@ -156,9 +165,13 @@ async def search_cases(
     search_term: str | None = Query(
         None, description="Text to search for in case summary and description"
     ),
-    status: CaseStatus | None = Query(None, description="Filter by case status"),
-    priority: CasePriority | None = Query(None, description="Filter by case priority"),
-    severity: CaseSeverity | None = Query(None, description="Filter by case severity"),
+    status: list[CaseStatus] | None = Query(None, description="Filter by case status"),
+    priority: list[CasePriority] | None = Query(
+        None, description="Filter by case priority"
+    ),
+    severity: list[CaseSeverity] | None = Query(
+        None, description="Filter by case severity"
+    ),
     tags: list[str] | None = Query(
         None, description="Filter by tag IDs or slugs (AND logic)"
     ),
@@ -168,6 +181,18 @@ async def search_cases(
     sort: Literal["asc", "desc"] | None = Query(
         None, description="Direction to sort (asc or desc)"
     ),
+    start_time: datetime | None = Query(
+        None, description="Return cases created at or after this timestamp"
+    ),
+    end_time: datetime | None = Query(
+        None, description="Return cases created at or before this timestamp"
+    ),
+    updated_after: datetime | None = Query(
+        None, description="Return cases updated at or after this timestamp"
+    ),
+    updated_before: datetime | None = Query(
+        None, description="Return cases updated at or before this timestamp"
+    ),
 ) -> list[CaseReadMinimal]:
     """Search cases based on various criteria."""
     service = CasesService(session, role)
@@ -175,7 +200,7 @@ async def search_cases(
     # Convert tag identifiers to IDs
     tag_ids = []
     if tags:
-        tags_service = TagsService(session, role)
+        tags_service = CaseTagsService(session, role)
         for tag_identifier in tags:
             try:
                 tag = await tags_service.get_tag_by_ref_or_id(tag_identifier)
@@ -184,22 +209,36 @@ async def search_cases(
                 # Skip tags that do not exist in the workspace
                 continue
 
-    cases = await service.search_cases(
-        search_term=search_term,
-        status=status,
-        priority=priority,
-        severity=severity,
-        tag_ids=tag_ids,
-        limit=limit,
-        order_by=order_by,
-        sort=sort,
-    )
+    try:
+        cases = await service.search_cases(
+            search_term=search_term,
+            status=status,
+            priority=priority,
+            severity=severity,
+            tag_ids=tag_ids,
+            limit=limit,
+            order_by=order_by,
+            sort=sort,
+            start_time=start_time,
+            end_time=end_time,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        )
+    except ProgrammingError as exc:
+        logger.exception(
+            "Failed to search cases due to invalid filter parameters", exc_info=exc
+        )
+        await session.rollback()
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail="Invalid filter parameters supplied for case search",
+        ) from exc
 
     # Build case responses with tags (tags are already loaded via selectinload)
     case_responses = []
     for case in cases:
         tag_reads = [
-            TagRead.model_validate(tag, from_attributes=True) for tag in case.tags
+            CaseTagRead.model_validate(tag, from_attributes=True) for tag in case.tags
         ]
 
         case_responses.append(
@@ -255,7 +294,9 @@ async def get_case(
         )
 
     # Tags are already loaded via selectinload
-    tag_reads = [TagRead.model_validate(tag, from_attributes=True) for tag in case.tags]
+    tag_reads = [
+        CaseTagRead.model_validate(tag, from_attributes=True) for tag in case.tags
+    ]
 
     # Match up the fields with the case field definitions
     return CaseRead(
@@ -286,7 +327,13 @@ async def create_case(
 ) -> None:
     """Create a new case."""
     service = CasesService(session, role)
-    await service.create_case(params)
+    try:
+        await service.create_case(params)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
 
 
 @cases_router.patch("/{case_id}", status_code=HTTP_204_NO_CONTENT)
@@ -307,6 +354,11 @@ async def update_case(
         )
     try:
         await service.update_case(case, params)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
     except DBAPIError as e:
         while (cause := e.__cause__) is not None:
             e = cause

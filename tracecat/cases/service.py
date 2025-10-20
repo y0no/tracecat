@@ -12,6 +12,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from tracecat.auth.models import UserRead
 from tracecat.cases.attachments import CaseAttachmentService
+from tracecat.cases.durations.service import CaseDurationService
 from tracecat.cases.enums import (
     CasePriority,
     CaseSeverity,
@@ -38,6 +39,7 @@ from tracecat.cases.models import (
     StatusChangedEvent,
     UpdatedEvent,
 )
+from tracecat.cases.tags.models import CaseTagRead
 from tracecat.cases.tags.service import CaseTagsService
 from tracecat.contexts import ctx_run
 from tracecat.db.schemas import (
@@ -45,22 +47,46 @@ from tracecat.db.schemas import (
     CaseComment,
     CaseEvent,
     CaseFields,
-    CaseTag,
+    CaseTagLink,
     User,
 )
 from tracecat.service import BaseWorkspaceService
 from tracecat.tables.service import TableEditorService, TablesService
-from tracecat.tags.models import TagRead
 from tracecat.types.auth import Role
 from tracecat.types.exceptions import (
     TracecatAuthorizationError,
     TracecatException,
+    TracecatNotFoundError,
 )
 from tracecat.types.pagination import (
     BaseCursorPaginator,
     CursorPaginatedResponse,
     CursorPaginationParams,
 )
+
+
+def _normalize_filter_values(values: Any) -> list[Any]:
+    """Ensure filter inputs are lists of unique values."""
+    if values is None:
+        return []
+    if isinstance(values, str | bytes):
+        return [values]
+    if isinstance(values, Sequence):
+        unique: list[Any] = []
+        for value in values:
+            if value not in unique:
+                unique.append(value)
+        return unique
+    return [values]
+
+
+def _normalize_datetime(dt: datetime | None) -> datetime | None:
+    """Ensure datetimes are timezone-aware and normalised to UTC."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 class CasesService(BaseWorkspaceService):
@@ -73,6 +99,7 @@ class CasesService(BaseWorkspaceService):
         self.events = CaseEventsService(session=self.session, role=self.role)
         self.attachments = CaseAttachmentService(session=self.session, role=self.role)
         self.tags = CaseTagsService(session=self.session, role=self.role)
+        self.durations = CaseDurationService(session=self.session, role=self.role)
 
     async def list_cases(
         self,
@@ -99,10 +126,11 @@ class CasesService(BaseWorkspaceService):
         self,
         params: CursorPaginationParams,
         search_term: str | None = None,
-        status: CaseStatus | None = None,
-        priority: CasePriority | None = None,
-        severity: CaseSeverity | None = None,
-        assignee_id: uuid.UUID | str | None = None,
+        status: CaseStatus | Sequence[CaseStatus] | None = None,
+        priority: CasePriority | Sequence[CasePriority] | None = None,
+        severity: CaseSeverity | Sequence[CaseSeverity] | None = None,
+        assignee_ids: Sequence[uuid.UUID] | None = None,
+        include_unassigned: bool = False,
         tag_ids: list[uuid.UUID] | None = None,
     ) -> CursorPaginatedResponse[CaseReadMinimal]:
         """List cases with cursor-based pagination and filtering."""
@@ -137,32 +165,43 @@ class CasesService(BaseWorkspaceService):
                 )
             )
 
-        # Apply status filter
-        if status:
-            stmt = stmt.where(Case.status == status)
+        normalized_statuses = _normalize_filter_values(status)
+        if normalized_statuses:
+            stmt = stmt.where(col(Case.status).in_(normalized_statuses))
 
         # Apply priority filter
-        if priority:
-            stmt = stmt.where(Case.priority == priority)
+        normalized_priorities = _normalize_filter_values(priority)
+        if normalized_priorities:
+            stmt = stmt.where(col(Case.priority).in_(normalized_priorities))
 
         # Apply severity filter
-        if severity:
-            stmt = stmt.where(Case.severity == severity)
+        normalized_severities = _normalize_filter_values(severity)
+        if normalized_severities:
+            stmt = stmt.where(col(Case.severity).in_(normalized_severities))
 
         # Apply assignee filter
-        if assignee_id is not None:
-            # Special handling for unassigned cases
-            if assignee_id == "unassigned":
-                stmt = stmt.where(col(Case.assignee_id).is_(None))
-            else:
-                stmt = stmt.where(Case.assignee_id == assignee_id)
+        if include_unassigned or assignee_ids:
+            unique_assignees = list(dict.fromkeys(assignee_ids or []))
+            assignee_conditions: list[Any] = []
+
+            if unique_assignees:
+                assignee_conditions.append(col(Case.assignee_id).in_(unique_assignees))
+
+            if include_unassigned:
+                assignee_conditions.append(col(Case.assignee_id).is_(None))
+
+            if assignee_conditions:
+                if len(assignee_conditions) == 1:
+                    stmt = stmt.where(assignee_conditions[0])
+                else:
+                    stmt = stmt.where(or_(*assignee_conditions))
 
         # Apply tag filtering if tag_ids provided (AND logic - case must have all tags)
         if tag_ids:
             for tag_id in tag_ids:
                 stmt = stmt.where(
                     col(Case.id).in_(
-                        select(CaseTag.case_id).where(CaseTag.tag_id == tag_id)
+                        select(CaseTagLink.case_id).where(CaseTagLink.tag_id == tag_id)
                     )
                 )
 
@@ -228,7 +267,8 @@ class CasesService(BaseWorkspaceService):
         for case in cases:
             # Tags are already loaded via selectinload
             tag_reads = [
-                TagRead.model_validate(tag, from_attributes=True) for tag in case.tags
+                CaseTagRead.model_validate(tag, from_attributes=True)
+                for tag in case.tags
             ]
 
             case_items.append(
@@ -262,9 +302,9 @@ class CasesService(BaseWorkspaceService):
     async def search_cases(
         self,
         search_term: str | None = None,
-        status: CaseStatus | None = None,
-        priority: CasePriority | None = None,
-        severity: CaseSeverity | None = None,
+        status: CaseStatus | Sequence[CaseStatus] | None = None,
+        priority: CasePriority | Sequence[CasePriority] | None = None,
+        severity: CaseSeverity | Sequence[CaseSeverity] | None = None,
         tag_ids: list[uuid.UUID] | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
@@ -317,36 +357,46 @@ class CasesService(BaseWorkspaceService):
             )
 
         # Apply status filter
-        if status:
-            statement = statement.where(Case.status == status)
+        normalized_statuses = _normalize_filter_values(status)
+        if normalized_statuses:
+            statement = statement.where(col(Case.status).in_(normalized_statuses))
 
         # Apply priority filter
-        if priority:
-            statement = statement.where(Case.priority == priority)
+        normalized_priorities = _normalize_filter_values(priority)
+        if normalized_priorities:
+            statement = statement.where(col(Case.priority).in_(normalized_priorities))
 
         # Apply severity filter
-        if severity:
-            statement = statement.where(Case.severity == severity)
+        normalized_severities = _normalize_filter_values(severity)
+        if normalized_severities:
+            statement = statement.where(col(Case.severity).in_(normalized_severities))
 
         # Apply tag filtering if specified (AND logic for multiple tags)
         if tag_ids:
             for tag_id in tag_ids:
                 # Self-join for each tag to ensure case has ALL specified tags
-                tag_alias = aliased(CaseTag)
+                tag_alias = aliased(CaseTagLink)
                 statement = statement.join(
                     tag_alias,
                     and_(tag_alias.case_id == Case.id, tag_alias.tag_id == tag_id),
                 )
 
         # Apply date filters
-        if start_time:
-            statement = statement.where(Case.created_at >= start_time)
-        if end_time:
-            statement = statement.where(Case.created_at <= end_time)
-        if updated_after:
-            statement = statement.where(Case.updated_at >= updated_after)
-        if updated_before:
-            statement = statement.where(Case.updated_at <= updated_before)
+        normalized_start = _normalize_datetime(start_time)
+        if normalized_start is not None:
+            statement = statement.where(Case.created_at >= normalized_start)
+
+        normalized_end = _normalize_datetime(end_time)
+        if normalized_end is not None:
+            statement = statement.where(Case.created_at <= normalized_end)
+
+        normalized_updated_after = _normalize_datetime(updated_after)
+        if normalized_updated_after is not None:
+            statement = statement.where(Case.updated_at >= normalized_updated_after)
+
+        normalized_updated_before = _normalize_datetime(updated_before)
+        if normalized_updated_before is not None:
+            statement = statement.where(Case.updated_at <= normalized_updated_before)
 
         # Apply limit
         if limit is not None:
@@ -390,35 +440,40 @@ class CasesService(BaseWorkspaceService):
         return result.first()
 
     async def create_case(self, params: CaseCreate) -> Case:
-        # Create the base case first
-        case = Case(
-            owner_id=self.workspace_id,
-            summary=params.summary,
-            description=params.description,
-            priority=params.priority,
-            severity=params.severity,
-            status=params.status,
-            assignee_id=params.assignee_id,
-            payload=params.payload,
-        )
+        try:
+            # Create the base case first
+            case = Case(
+                owner_id=self.workspace_id,
+                summary=params.summary,
+                description=params.description,
+                priority=params.priority,
+                severity=params.severity,
+                status=params.status,
+                assignee_id=params.assignee_id,
+                payload=params.payload,
+            )
 
-        self.session.add(case)
-        await self.session.flush()  # Generate case ID
+            self.session.add(case)
+            await self.session.flush()  # Generate case ID
 
-        # If fields are provided, create the fields row
-        if params.fields:
-            await self.fields.create_field_values(case, params.fields)
+            # Always create the fields row to ensure defaults are applied
+            # Pass empty dict if no fields provided to trigger default value application
+            await self.fields.create_field_values(case, params.fields or {})
 
-        run_ctx = ctx_run.get()
-        await self.events.create_event(
-            case=case,
-            event=CreatedEvent(wf_exec_id=run_ctx.wf_exec_id if run_ctx else None),
-        )
+            run_ctx = ctx_run.get()
+            await self.events.create_event(
+                case=case,
+                event=CreatedEvent(wf_exec_id=run_ctx.wf_exec_id if run_ctx else None),
+            )
 
-        await self.session.commit()
-        # Make sure to refresh the case to get the fields relationship loaded
-        await self.session.refresh(case)
-        return case
+            # Commit once to persist case, fields, and event atomically
+            await self.session.commit()
+            # Make sure to refresh the case to get the fields relationship loaded
+            await self.session.refresh(case)
+            return case
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def update_case(self, case: Case, params: CaseUpdate) -> Case:
         """Update a case and optionally its custom fields.
@@ -534,14 +589,18 @@ class CasesService(BaseWorkspaceService):
                 if old != value:
                     events.append(PayloadChangedEvent(wf_exec_id=wf_exec_id))
 
-        # If there are any remaining changed fields, record a general update activity
-        for event in events:
-            await self.events.create_event(case=case, event=event)
+        try:
+            # If there are any remaining changed fields, record a general update activity
+            for event in events:
+                await self.events.create_event(case=case, event=event)
 
-        # Commit changes and refresh case
-        await self.session.commit()
-        await self.session.refresh(case)
-        return case
+            # Commit once to persist all updates and emitted events atomically
+            await self.session.commit()
+            await self.session.refresh(case)
+            return case
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def delete_case(self, case: Case) -> None:
         """Delete a case and optionally its associated field data.
@@ -644,19 +703,42 @@ class CaseFieldsService(BaseWorkspaceService):
 
         # This will use the created case_fields ID
         try:
-            res = await self.editor.update_row(row_id=case_fields.id, data=fields)
-            await self.session.flush()
-            return res
+            if fields:
+                # If fields provided, update the row with those values
+                res = await self.editor.update_row(row_id=case_fields.id, data=fields)
+                await self.session.flush()
+                return res
+            else:
+                # If no fields provided, just get the row to return defaults
+                res = await self.editor.get_row(row_id=case_fields.id)
+                return res
+        except TracecatNotFoundError as e:
+            # This happens when UPDATE/SELECT finds no row - shouldn't occur after INSERT
+            self.logger.error(
+                "Case fields row not found after creation",
+                case_fields_id=case_fields.id,
+                case_id=case.id,
+                fields=fields,
+                error=str(e),
+            )
+            # Extract field names for better error message
+            field_names = list(fields.keys()) if fields else []
+            field_info = (
+                f" Fields attempted: {', '.join(field_names)}." if field_names else ""
+            )
+            raise TracecatException(
+                f"Failed to save custom field values for case. The field row was created but could not be updated.{field_info} "
+                "Please verify all custom fields exist in Settings > Cases > Custom Fields and have correct data types."
+            ) from e
         except ProgrammingError as e:
             while cause := e.__cause__:
                 e = cause
             if isinstance(e, UndefinedColumnError):
                 raise TracecatException(
-                    f"Failed to create case fields. {str(e).replace('relation', 'table').capitalize()}."
-                    " Please ensure these fields have been created and try again."
+                    "Failed to create case fields. One or more custom fields do not exist. Please ensure these fields have been created and try again."
                 ) from e
             raise TracecatException(
-                f"Unexpected error creating case fields: {e}"
+                "Failed to create case fields due to an unexpected error."
             ) from e
 
     async def update_field_values(self, id: uuid.UUID, fields: dict[str, Any]) -> None:
@@ -673,11 +755,10 @@ class CaseFieldsService(BaseWorkspaceService):
                 e = cause
             if isinstance(e, UndefinedColumnError):
                 raise TracecatException(
-                    f"Failed to update case fields. {str(e).replace('relation', 'table').capitalize()}."
-                    " Please ensure these fields have been created and try again."
+                    "Failed to update case fields. One or more custom fields do not exist. Please ensure these fields have been created and try again."
                 ) from e
             raise TracecatException(
-                f"Unexpected error updating case fields: {e}"
+                "Failed to update case fields due to an unexpected error."
             ) from e
 
 
@@ -819,6 +900,9 @@ class CaseEventsService(BaseWorkspaceService):
 
     service_name = "case_events"
 
+    def __init__(self, session: AsyncSession, role: Role | None = None):
+        super().__init__(session, role)
+
     async def list_events(self, case: Case) -> Sequence[CaseEvent]:
         """List all events for a case."""
         statement = (
@@ -830,7 +914,12 @@ class CaseEventsService(BaseWorkspaceService):
         return result.all()
 
     async def create_event(self, case: Case, event: CaseEventVariant) -> CaseEvent:
-        """Create a new activity record for a case with variant-specific data."""
+        """Create a new activity record for a case with variant-specific data.
+
+        Note: This method is non-committing. The caller is responsible for
+        wrapping operations in a transaction and committing once at the end
+        to preserve atomicity across multi-step updates.
+        """
         db_event = CaseEvent(
             owner_id=self.workspace_id,
             case_id=case.id,
@@ -839,6 +928,6 @@ class CaseEventsService(BaseWorkspaceService):
             user_id=self.role.user_id,
         )
         self.session.add(db_event)
-        await self.session.commit()
-        await self.session.refresh(db_event)
+        # Flush so that generated fields (e.g., id) are available if needed
+        await self.session.flush()
         return db_event

@@ -27,6 +27,8 @@ import type {
   AgentListProvidersResponse,
   AgentSetDefaultModelData,
   AgentSetDefaultModelResponse,
+  AgentStreamAgentSessionData,
+  AgentStreamAgentSessionResponse,
   AgentUpdateProviderCredentialsData,
   AgentUpdateProviderCredentialsResponse,
   AuthAuthDatabaseLoginData,
@@ -57,6 +59,16 @@ import type {
   CaseAttachmentsDownloadAttachmentResponse,
   CaseAttachmentsListAttachmentsData,
   CaseAttachmentsListAttachmentsResponse,
+  CaseDurationsCreateCaseDurationData,
+  CaseDurationsCreateCaseDurationResponse,
+  CaseDurationsDeleteCaseDurationData,
+  CaseDurationsDeleteCaseDurationResponse,
+  CaseDurationsGetCaseDurationData,
+  CaseDurationsGetCaseDurationResponse,
+  CaseDurationsListCaseDurationsData,
+  CaseDurationsListCaseDurationsResponse,
+  CaseDurationsUpdateCaseDurationData,
+  CaseDurationsUpdateCaseDurationResponse,
   CaseRecordsCreateCaseRecordData,
   CaseRecordsCreateCaseRecordResponse,
   CaseRecordsDeleteCaseRecordData,
@@ -107,14 +119,26 @@ import type {
   CasesUpdateCommentResponse,
   CasesUpdateFieldData,
   CasesUpdateFieldResponse,
+  CaseTagsCreateCaseTagData,
+  CaseTagsCreateCaseTagResponse,
+  CaseTagsDeleteCaseTagData,
+  CaseTagsDeleteCaseTagResponse,
+  CaseTagsGetCaseTagData,
+  CaseTagsGetCaseTagResponse,
+  CaseTagsListCaseTagsData,
+  CaseTagsListCaseTagsResponse,
+  CaseTagsUpdateCaseTagData,
+  CaseTagsUpdateCaseTagResponse,
+  ChatChatWithVercelStreamingData,
+  ChatChatWithVercelStreamingResponse,
   ChatCreateChatData,
   ChatCreateChatResponse,
   ChatGetChatData,
   ChatGetChatResponse,
+  ChatGetChatVercelData,
+  ChatGetChatVercelResponse,
   ChatListChatsData,
   ChatListChatsResponse,
-  ChatStartChatTurnData,
-  ChatStartChatTurnResponse,
   ChatStreamChatEventsData,
   ChatStreamChatEventsResponse,
   ChatUpdateChatData,
@@ -1385,7 +1409,7 @@ export const workflowExecutionsGetWorkflowExecution = (
  * @param data The data for the request.
  * @param data.executionId
  * @param data.workspaceId
- * @returns WorkflowExecutionReadCompact_Any_Union_AgentOutput__Any__ Successful Response
+ * @returns WorkflowExecutionReadCompact_Any_Union_AgentOutput__Any__Any_ Successful Response
  * @throws ApiError
  */
 export const workflowExecutionsGetWorkflowExecutionCompact = (
@@ -3127,6 +3151,43 @@ export const agentSetDefaultModel = (
 }
 
 /**
+ * Stream Agent Session
+ * Stream agent session events via Server-Sent Events (SSE).
+ *
+ * This endpoint provides real-time streaming of AI agent execution steps
+ * using Server-Sent Events. It supports automatic reconnection via the
+ * Last-Event-ID header.
+ * @param data The data for the request.
+ * @param data.sessionId
+ * @param data.workspaceId
+ * @param data.format Streaming format (e.g. 'vercel')
+ * @param data.lastEventId
+ * @returns unknown Successful Response
+ * @throws ApiError
+ */
+export const agentStreamAgentSession = (
+  data: AgentStreamAgentSessionData
+): CancelablePromise<AgentStreamAgentSessionResponse> => {
+  return __request(OpenAPI, {
+    method: "GET",
+    url: "/agent/sessions/{session_id}",
+    path: {
+      session_id: data.sessionId,
+    },
+    headers: {
+      "last-event-id": data.lastEventId,
+    },
+    query: {
+      format: data.format,
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
  * List Functions
  * @param data The data for the request.
  * @param data.workspaceId
@@ -4323,6 +4384,10 @@ export const casesCreateCase = (
  * @param data.limit Maximum number of cases to return
  * @param data.orderBy Field to order the cases by
  * @param data.sort Direction to sort (asc or desc)
+ * @param data.startTime Return cases created at or after this timestamp
+ * @param data.endTime Return cases created at or before this timestamp
+ * @param data.updatedAfter Return cases updated at or after this timestamp
+ * @param data.updatedBefore Return cases updated at or before this timestamp
  * @returns CaseReadMinimal Successful Response
  * @throws ApiError
  */
@@ -4341,6 +4406,10 @@ export const casesSearchCases = (
       limit: data.limit,
       order_by: data.orderBy,
       sort: data.sort,
+      start_time: data.startTime,
+      end_time: data.endTime,
+      updated_after: data.updatedAfter,
+      updated_before: data.updatedBefore,
       workspace_id: data.workspaceId,
     },
     errors: {
@@ -4771,6 +4840,139 @@ export const casesRemoveTag = (
 }
 
 /**
+ * List Case Tags
+ * List all case tags available in the current workspace.
+ * @param data The data for the request.
+ * @param data.workspaceId
+ * @returns CaseTagRead Successful Response
+ * @throws ApiError
+ */
+export const caseTagsListCaseTags = (
+  data: CaseTagsListCaseTagsData
+): CancelablePromise<CaseTagsListCaseTagsResponse> => {
+  return __request(OpenAPI, {
+    method: "GET",
+    url: "/case-tags",
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Create Case Tag
+ * Create a new case tag definition.
+ * @param data The data for the request.
+ * @param data.workspaceId
+ * @param data.requestBody
+ * @returns CaseTagRead Successful Response
+ * @throws ApiError
+ */
+export const caseTagsCreateCaseTag = (
+  data: CaseTagsCreateCaseTagData
+): CancelablePromise<CaseTagsCreateCaseTagResponse> => {
+  return __request(OpenAPI, {
+    method: "POST",
+    url: "/case-tags",
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    body: data.requestBody,
+    mediaType: "application/json",
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Get Case Tag
+ * Retrieve a single case tag by ID.
+ * @param data The data for the request.
+ * @param data.tagId
+ * @param data.workspaceId
+ * @returns CaseTagRead Successful Response
+ * @throws ApiError
+ */
+export const caseTagsGetCaseTag = (
+  data: CaseTagsGetCaseTagData
+): CancelablePromise<CaseTagsGetCaseTagResponse> => {
+  return __request(OpenAPI, {
+    method: "GET",
+    url: "/case-tags/{tag_id}",
+    path: {
+      tag_id: data.tagId,
+    },
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Update Case Tag
+ * Update an existing case tag definition.
+ * @param data The data for the request.
+ * @param data.tagId
+ * @param data.workspaceId
+ * @param data.requestBody
+ * @returns CaseTagRead Successful Response
+ * @throws ApiError
+ */
+export const caseTagsUpdateCaseTag = (
+  data: CaseTagsUpdateCaseTagData
+): CancelablePromise<CaseTagsUpdateCaseTagResponse> => {
+  return __request(OpenAPI, {
+    method: "PATCH",
+    url: "/case-tags/{tag_id}",
+    path: {
+      tag_id: data.tagId,
+    },
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    body: data.requestBody,
+    mediaType: "application/json",
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Delete Case Tag
+ * Delete a case tag definition.
+ * @param data The data for the request.
+ * @param data.tagId
+ * @param data.workspaceId
+ * @returns void Successful Response
+ * @throws ApiError
+ */
+export const caseTagsDeleteCaseTag = (
+  data: CaseTagsDeleteCaseTagData
+): CancelablePromise<CaseTagsDeleteCaseTagResponse> => {
+  return __request(OpenAPI, {
+    method: "DELETE",
+    url: "/case-tags/{tag_id}",
+    path: {
+      tag_id: data.tagId,
+    },
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
  * List Attachments
  * List all attachments for a case.
  * @param data The data for the request.
@@ -4877,6 +5079,139 @@ export const caseAttachmentsDeleteAttachment = (
     path: {
       case_id: data.caseId,
       attachment_id: data.attachmentId,
+    },
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * List Case Durations
+ * List all case duration definitions for the active workspace.
+ * @param data The data for the request.
+ * @param data.workspaceId
+ * @returns CaseDurationRead Successful Response
+ * @throws ApiError
+ */
+export const caseDurationsListCaseDurations = (
+  data: CaseDurationsListCaseDurationsData
+): CancelablePromise<CaseDurationsListCaseDurationsResponse> => {
+  return __request(OpenAPI, {
+    method: "GET",
+    url: "/case-durations",
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Create Case Duration
+ * Create a new case duration definition.
+ * @param data The data for the request.
+ * @param data.workspaceId
+ * @param data.requestBody
+ * @returns CaseDurationRead Successful Response
+ * @throws ApiError
+ */
+export const caseDurationsCreateCaseDuration = (
+  data: CaseDurationsCreateCaseDurationData
+): CancelablePromise<CaseDurationsCreateCaseDurationResponse> => {
+  return __request(OpenAPI, {
+    method: "POST",
+    url: "/case-durations",
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    body: data.requestBody,
+    mediaType: "application/json",
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Get Case Duration
+ * Retrieve a single case duration definition.
+ * @param data The data for the request.
+ * @param data.durationId
+ * @param data.workspaceId
+ * @returns CaseDurationRead Successful Response
+ * @throws ApiError
+ */
+export const caseDurationsGetCaseDuration = (
+  data: CaseDurationsGetCaseDurationData
+): CancelablePromise<CaseDurationsGetCaseDurationResponse> => {
+  return __request(OpenAPI, {
+    method: "GET",
+    url: "/case-durations/{duration_id}",
+    path: {
+      duration_id: data.durationId,
+    },
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Update Case Duration
+ * Update an existing case duration definition.
+ * @param data The data for the request.
+ * @param data.durationId
+ * @param data.workspaceId
+ * @param data.requestBody
+ * @returns CaseDurationRead Successful Response
+ * @throws ApiError
+ */
+export const caseDurationsUpdateCaseDuration = (
+  data: CaseDurationsUpdateCaseDurationData
+): CancelablePromise<CaseDurationsUpdateCaseDurationResponse> => {
+  return __request(OpenAPI, {
+    method: "PATCH",
+    url: "/case-durations/{duration_id}",
+    path: {
+      duration_id: data.durationId,
+    },
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    body: data.requestBody,
+    mediaType: "application/json",
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Delete Case Duration
+ * Delete a case duration definition.
+ * @param data The data for the request.
+ * @param data.durationId
+ * @param data.workspaceId
+ * @returns void Successful Response
+ * @throws ApiError
+ */
+export const caseDurationsDeleteCaseDuration = (
+  data: CaseDurationsDeleteCaseDurationData
+): CancelablePromise<CaseDurationsDeleteCaseDurationResponse> => {
+  return __request(OpenAPI, {
+    method: "DELETE",
+    url: "/case-durations/{duration_id}",
+    path: {
+      duration_id: data.durationId,
     },
     query: {
       workspace_id: data.workspaceId,
@@ -5099,7 +5434,7 @@ export const caseRecordsUnlinkCaseRecord = (
  * @param data The data for the request.
  * @param data.workspaceId
  * @param data.requestBody
- * @returns ChatRead Successful Response
+ * @returns ChatReadMinimal Successful Response
  * @throws ApiError
  */
 export const chatCreateChat = (
@@ -5107,7 +5442,7 @@ export const chatCreateChat = (
 ): CancelablePromise<ChatCreateChatResponse> => {
   return __request(OpenAPI, {
     method: "POST",
-    url: "/chat/",
+    url: "/chat",
     query: {
       workspace_id: data.workspaceId,
     },
@@ -5127,7 +5462,7 @@ export const chatCreateChat = (
  * @param data.entityType Filter by entity type
  * @param data.entityId Filter by entity ID
  * @param data.limit Maximum number of chats to return
- * @returns ChatRead Successful Response
+ * @returns ChatReadMinimal Successful Response
  * @throws ApiError
  */
 export const chatListChats = (
@@ -5135,7 +5470,7 @@ export const chatListChats = (
 ): CancelablePromise<ChatListChatsResponse> => {
   return __request(OpenAPI, {
     method: "GET",
-    url: "/chat/",
+    url: "/chat",
     query: {
       entity_type: data.entityType,
       entity_id: data.entityId,
@@ -5154,7 +5489,7 @@ export const chatListChats = (
  * @param data The data for the request.
  * @param data.chatId
  * @param data.workspaceId
- * @returns ChatWithMessages Successful Response
+ * @returns ChatRead Successful Response
  * @throws ApiError
  */
 export const chatGetChat = (
@@ -5182,7 +5517,7 @@ export const chatGetChat = (
  * @param data.chatId
  * @param data.workspaceId
  * @param data.requestBody
- * @returns ChatRead Successful Response
+ * @returns ChatReadMinimal Successful Response
  * @throws ApiError
  */
 export const chatUpdateChat = (
@@ -5206,24 +5541,54 @@ export const chatUpdateChat = (
 }
 
 /**
- * Start Chat Turn
- * Start a new chat turn with an AI agent.
+ * Get Chat Vercel
+ * Get a chat with its message history in Vercel format.
+ * @param data The data for the request.
+ * @param data.chatId
+ * @param data.workspaceId
+ * @returns ChatReadVercel Successful Response
+ * @throws ApiError
+ */
+export const chatGetChatVercel = (
+  data: ChatGetChatVercelData
+): CancelablePromise<ChatGetChatVercelResponse> => {
+  return __request(OpenAPI, {
+    method: "GET",
+    url: "/chat/{chat_id}/vercel",
+    path: {
+      chat_id: data.chatId,
+    },
+    query: {
+      workspace_id: data.workspaceId,
+    },
+    errors: {
+      422: "Validation Error",
+    },
+  })
+}
+
+/**
+ * Chat With Vercel Streaming
+ * Vercel AI SDK compatible chat endpoint with streaming.
  *
- * This endpoint initiates an AI agent execution and returns a stream URL
- * for real-time streaming of the agent's processing steps.
+ * This endpoint combines chat turn initiation with streaming response,
+ * compatible with Vercel's AI SDK useChat hook. It:
+ * 1. Accepts Vercel UI message format
+ * 2. Starts the agent execution
+ * 3. Streams the response back in Vercel's data protocol format
  * @param data The data for the request.
  * @param data.chatId
  * @param data.workspaceId
  * @param data.requestBody
- * @returns ChatResponse Successful Response
+ * @returns unknown Successful Response
  * @throws ApiError
  */
-export const chatStartChatTurn = (
-  data: ChatStartChatTurnData
-): CancelablePromise<ChatStartChatTurnResponse> => {
+export const chatChatWithVercelStreaming = (
+  data: ChatChatWithVercelStreamingData
+): CancelablePromise<ChatChatWithVercelStreamingResponse> => {
   return __request(OpenAPI, {
     method: "POST",
-    url: "/chat/{chat_id}",
+    url: "/chat/{chat_id}/vercel",
     path: {
       chat_id: data.chatId,
     },
@@ -5248,6 +5613,7 @@ export const chatStartChatTurn = (
  * @param data The data for the request.
  * @param data.chatId
  * @param data.workspaceId
+ * @param data.format Streaming format (e.g. 'vercel')
  * @returns unknown Successful Response
  * @throws ApiError
  */
@@ -5261,6 +5627,7 @@ export const chatStreamChatEvents = (
       chat_id: data.chatId,
     },
     query: {
+      format: data.format,
       workspace_id: data.workspaceId,
     },
     errors: {

@@ -32,6 +32,7 @@ import {
   type CaseCommentRead,
   type CaseCommentUpdate,
   type CaseCreate,
+  type CaseDurationRead,
   type CaseEventsWithUsers,
   type CaseFieldRead,
   type CaseRead,
@@ -45,6 +46,9 @@ import {
   type CasesListTagsData,
   type CaseTagCreate,
   type CaseTagRead,
+  type CaseTagsCreateCaseTagData,
+  type CaseTagsDeleteCaseTagData,
+  type CaseTagsUpdateCaseTagData,
   type CaseUpdate,
   caseRecordsCreateCaseRecord,
   caseRecordsDeleteCaseRecord,
@@ -65,6 +69,10 @@ import {
   casesRemoveTag,
   casesUpdateCase,
   casesUpdateComment,
+  caseTagsCreateCaseTag,
+  caseTagsDeleteCaseTag,
+  caseTagsListCaseTags,
+  caseTagsUpdateCaseTag,
   type FolderDirectoryItem,
   foldersCreateFolder,
   foldersDeleteFolder,
@@ -236,8 +244,9 @@ import {
 } from "@/client"
 import { toast } from "@/components/ui/use-toast"
 import { useGetRunbook } from "@/hooks/use-runbook"
-
 import { getBaseUrl } from "@/lib/api"
+import { listCaseDurations } from "@/lib/case-durations"
+import type { ModelInfo } from "@/lib/chat"
 import { retryHandler, type TracecatApiError } from "@/lib/errors"
 import type { WorkflowExecutionReadCompact } from "@/lib/event-history"
 import { useWorkspaceId } from "@/providers/workspace-id"
@@ -604,12 +613,20 @@ export function useWorkspaceManager() {
   })
 
   // Cookies
-  const getLastWorkspaceId = () =>
-    Cookies.get("__tracecat:workspaces:last-viewed")
-  const setLastWorkspaceId = (id?: string) =>
-    Cookies.set("__tracecat:workspaces:last-viewed", id ?? "")
-  const clearLastWorkspaceId = () =>
+  const getLastWorkspaceId = useCallback(
+    () => Cookies.get("__tracecat:workspaces:last-viewed"),
+    []
+  )
+  const setLastWorkspaceId = useCallback((id?: string) => {
+    if (!id) {
+      Cookies.set("__tracecat:workspaces:last-viewed", "")
+      return
+    }
+    Cookies.set("__tracecat:workspaces:last-viewed", id)
+  }, [])
+  const clearLastWorkspaceId = useCallback(() => {
     Cookies.remove("__tracecat:workspaces:last-viewed")
+  }, [])
 
   return {
     workspaces,
@@ -1675,7 +1692,7 @@ export function useSessions() {
   }
 }
 
-export function useTags(
+export function useWorkflowTags(
   workspaceId: string,
   options: { enabled: boolean } = { enabled: true }
 ) {
@@ -1812,6 +1829,150 @@ export function useTags(
     deleteTag,
     deleteTagIsPending,
     deleteTagError,
+  }
+}
+
+export function useCaseTagCatalog(
+  workspaceId: string,
+  options: { enabled: boolean } = { enabled: true }
+) {
+  const queryClient = useQueryClient()
+
+  const {
+    data: caseTags,
+    isLoading: caseTagsIsLoading,
+    error: caseTagsError,
+  } = useQuery<CaseTagRead[]>({
+    queryKey: ["case-tag-catalog", workspaceId],
+    queryFn: async () => await caseTagsListCaseTags({ workspaceId }),
+    enabled: options.enabled,
+  })
+
+  const {
+    mutateAsync: createCaseTag,
+    isPending: createCaseTagIsPending,
+    error: createCaseTagError,
+  } = useMutation({
+    mutationFn: async (params: CaseTagsCreateCaseTagData) =>
+      await caseTagsCreateCaseTag(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["case-tag-catalog", workspaceId],
+      })
+      queryClient.invalidateQueries({ queryKey: ["case-tags"] })
+      toast({
+        title: "Created case tag",
+        description: (
+          <div className="flex items-center space-x-2">
+            <CircleCheck className="size-4 fill-emerald-500 stroke-white" />
+            <span>Case tag created successfully.</span>
+          </div>
+        ),
+      })
+    },
+    onError: (error: TracecatApiError) => {
+      switch (error.status) {
+        case 400:
+          toast({
+            title: "Error creating case tag",
+            description: String(error.body.detail),
+          })
+          break
+        case 403:
+          toast({
+            title: "Forbidden",
+            description: "You cannot perform this action",
+          })
+          break
+        default:
+          console.error("Failed to create case tag", error)
+          toast({
+            title: "Failed to create case tag",
+            description: `An error occurred while creating the case tag: ${error.body.detail}`,
+          })
+      }
+    },
+  })
+
+  const {
+    mutateAsync: updateCaseTag,
+    isPending: updateCaseTagIsPending,
+    error: updateCaseTagError,
+  } = useMutation({
+    mutationFn: async (params: CaseTagsUpdateCaseTagData) =>
+      await caseTagsUpdateCaseTag(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["case-tag-catalog", workspaceId],
+      })
+      queryClient.invalidateQueries({ queryKey: ["cases"] })
+      queryClient.invalidateQueries({ queryKey: ["case-tags"] })
+      toast({
+        title: "Updated case tag",
+        description: "Case tag updated successfully.",
+      })
+    },
+    onError: (error: TracecatApiError) => {
+      switch (error.status) {
+        case 400:
+          toast({
+            title: "Error updating case tag",
+            description: String(error.body.detail),
+          })
+          break
+        case 403:
+          toast({
+            title: "Forbidden",
+            description: "You cannot perform this action",
+          })
+          break
+      }
+    },
+  })
+
+  const {
+    mutateAsync: deleteCaseTag,
+    isPending: deleteCaseTagIsPending,
+    error: deleteCaseTagError,
+  } = useMutation({
+    mutationFn: async (params: CaseTagsDeleteCaseTagData) =>
+      await caseTagsDeleteCaseTag(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["case-tag-catalog", workspaceId],
+      })
+      queryClient.invalidateQueries({ queryKey: ["cases"] })
+      queryClient.invalidateQueries({ queryKey: ["case-tags"] })
+      toast({
+        title: "Deleted case tag",
+        description: "Case tag deleted successfully.",
+      })
+    },
+    onError: (error: TracecatApiError) => {
+      switch (error.status) {
+        case 403:
+          toast({
+            title: "Forbidden",
+            description: "You cannot perform this action",
+          })
+          break
+      }
+    },
+  })
+
+  return {
+    caseTags,
+    caseTagsIsLoading,
+    caseTagsError,
+    createCaseTag,
+    createCaseTagIsPending,
+    createCaseTagError,
+    updateCaseTag,
+    updateCaseTagIsPending,
+    updateCaseTagError,
+    deleteCaseTag,
+    deleteCaseTagIsPending,
+    deleteCaseTagError,
   }
 }
 
@@ -3113,6 +3274,24 @@ export function useDeleteCase({ workspaceId }: { workspaceId: string }) {
   }
 }
 
+export function useCaseDurations(workspaceId: string) {
+  const {
+    data: caseDurations,
+    isLoading: caseDurationsIsLoading,
+    error: caseDurationsError,
+  } = useQuery<CaseDurationRead[], Error>({
+    queryKey: ["case-durations", workspaceId],
+    queryFn: async () => await listCaseDurations(workspaceId),
+    enabled: Boolean(workspaceId),
+  })
+
+  return {
+    caseDurations,
+    caseDurationsIsLoading,
+    caseDurationsError,
+  }
+}
+
 export function useCaseFields(workspaceId: string) {
   const {
     data: caseFields,
@@ -4082,11 +4261,12 @@ export function useDeleteProviderCredentials() {
 
 /**
  * Are we ready to chat?
- * Returns { ready, reason, provider }
+ * Returns { ready, reason, modelInfo }
  *  ready   – boolean
  *  reason  – "no_model" | "no_credentials" | null
- *  provider – provider id that needs credentials (if any)
+ *  modelInfo – model info (if any)
  */
+
 export function useChatReadiness() {
   const { defaultModel, defaultModelLoading } = useAgentDefaultModel()
   const { models, modelsLoading } = useAgentModels()
@@ -4096,33 +4276,52 @@ export function useChatReadiness() {
   const loading = defaultModelLoading || modelsLoading || statusLoading
 
   if (loading) {
-    return { ready: false, loading: true, reason: null, provider: null }
+    return {
+      ready: false,
+      loading: true,
+    }
   }
 
   /* no default model set */
   if (!defaultModel) {
-    return { ready: false, loading: false, reason: "no_model", provider: null }
+    return {
+      ready: false,
+      loading: false,
+      reason: "no_model",
+    }
   }
 
   /* unknown model name → treat as no model */
   const modelCfg = models?.[defaultModel]
   if (!modelCfg) {
-    return { ready: false, loading: false, reason: "no_model", provider: null }
+    return {
+      ready: false,
+      loading: false,
+      reason: "no_model",
+    }
   }
 
   /* check provider creds */
   const providerId = modelCfg.provider
   const hasCreds = providersStatus?.[providerId] ?? false
+  const modelInfo: ModelInfo = {
+    name: defaultModel,
+    provider: providerId,
+  }
   if (!hasCreds) {
     return {
       ready: false,
       loading: false,
       reason: "no_credentials",
-      provider: providerId,
+      modelInfo,
     }
   }
 
-  return { ready: true, loading: false, reason: null, provider: providerId }
+  return {
+    ready: true,
+    loading: false,
+    modelInfo,
+  }
 }
 
 interface UseDragDividerOptions {

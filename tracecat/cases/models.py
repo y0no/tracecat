@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field, RootModel
 from tracecat.auth.models import UserRead
 from tracecat.cases.constants import RESERVED_CASE_FIELDS
 from tracecat.cases.enums import CaseEventType, CasePriority, CaseSeverity, CaseStatus
+from tracecat.cases.tags.models import CaseTagRead
+from tracecat.tables.common import parse_postgres_default
 from tracecat.tables.enums import SqlType
 from tracecat.tables.models import TableColumnCreate, TableColumnUpdate
-from tracecat.tags.models import TagRead
 
 
 class CaseReadMinimal(BaseModel):
@@ -25,7 +26,7 @@ class CaseReadMinimal(BaseModel):
     priority: CasePriority
     severity: CaseSeverity
     assignee: UserRead | None = None
-    tags: list[TagRead] = Field(default_factory=list)
+    tags: list[CaseTagRead] = Field(default_factory=list)
 
 
 class CaseRead(BaseModel):
@@ -41,7 +42,7 @@ class CaseRead(BaseModel):
     fields: list[CaseCustomFieldRead]
     assignee: UserRead | None = None
     payload: dict[str, Any] | None
-    tags: list[TagRead] = Field(default_factory=list)
+    tags: list[CaseTagRead] = Field(default_factory=list)
 
 
 class CaseCreate(BaseModel):
@@ -83,12 +84,33 @@ class CaseFieldRead(BaseModel):
     def from_sa(
         column: sa.engine.interfaces.ReflectedColumn,
     ) -> CaseFieldRead:
+        raw_type = column["type"]
+        if isinstance(raw_type, SqlType):
+            sql_type = raw_type
+        else:
+            if isinstance(raw_type, str):
+                type_str = raw_type.upper()
+            else:
+                type_str = str(raw_type).upper()
+                if hasattr(raw_type, "timezone"):
+                    type_str = (
+                        "TIMESTAMP WITH TIME ZONE"
+                        if getattr(raw_type, "timezone", False)
+                        else "TIMESTAMP WITHOUT TIME ZONE"
+                    )
+            # Normalise common Postgres timestamp representations produced by reflection.
+            if type_str == "TIMESTAMP WITH TIME ZONE":
+                sql_type = SqlType.TIMESTAMPTZ
+            elif type_str in {"TIMESTAMP WITHOUT TIME ZONE", "TIMESTAMP"}:
+                sql_type = SqlType.TIMESTAMP
+            else:
+                sql_type = SqlType(type_str)
         return CaseFieldRead(
             id=column["name"],
-            type=SqlType(str(column["type"])),
+            type=sql_type,
             description=column.get("comment") or "",
             nullable=column["nullable"],
-            default=column.get("default"),
+            default=parse_postgres_default(column.get("default")),
             reserved=column["name"] in RESERVED_CASE_FIELDS,
         )
 
